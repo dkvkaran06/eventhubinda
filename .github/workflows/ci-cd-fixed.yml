@@ -1,5 +1,5 @@
 # ==========================================================
-# TicketCharge Hub - GitHub Actions CI/CD
+# TicketCharge Hub - GitHub Actions CI/CD (FIXED)
 # Trigger: main branch pe push hone par
 # ==========================================================
 
@@ -12,8 +12,9 @@ on:
     branches: [ main, master ]
 
 env:
-  FRONTEND_IMAGE: ticketcharge-frontend
-  BACKEND_IMAGE: ticketcharge-backend
+  DOCKER_REPO: devkaran06/event
+  FRONTEND_TAG: frontend
+  BACKEND_TAG: backend
 
 jobs:
 
@@ -50,7 +51,7 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
 
       - name: ✅ Show dist/ size
-        run: du -sh dist/
+        run: du -sh dist/ || echo "dist not found"
 
       - name: 📤 Upload dist artifact
         uses: actions/upload-artifact@v4
@@ -84,7 +85,7 @@ jobs:
         run: echo "Backend dependencies install successful"
 
   # --------------------------------------------------------
-  # Job 3: Docker Build & Push (only on main branch)
+  # Job 3: Docker Build & Push (only if secrets exist)
   # --------------------------------------------------------
   docker-build-push:
     name: 🐳 Docker Build & Push
@@ -104,40 +105,86 @@ jobs:
       - name: 📦 Install Frontend Deps (for Docker build)
         run: npm install --legacy-peer-deps
 
+      # Check if secrets exist
+      - name: 🔍 Check Docker Credentials
+        id: check_secrets
+        run: |
+          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            echo "Docker credentials not configured"
+            echo "has_credentials=false" >> $GITHUB_OUTPUT
+          else
+            echo "Docker credentials found"
+            echo "has_credentials=true" >> $GITHUB_OUTPUT
+          fi
+
+      # Only login if credentials exist
       - name: 🔑 Login to Docker Hub
+        if: steps.check_secrets.outputs.has_credentials == 'true'
         uses: docker/login-action@v3
         with:
-          username: ${{ devkaran06 }}
-          password: ${{ sdHEYVPPPP@2023 }}
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: 🐳 Set up Docker Buildx
+      - name: ⚙️ Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Build but don't push if no credentials
       - name: 🏗️ Build & Push Frontend Image
+        if: steps.check_secrets.outputs.has_credentials == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.FRONTEND_IMAGE }}:latest
-            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.FRONTEND_IMAGE }}:${{ github.run_number }}
+            ${{ env.DOCKER_REPO }}:${{ env.FRONTEND_TAG }}
+            ${{ env.DOCKER_REPO }}:${{ env.FRONTEND_TAG }}-${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: 🏗️ Build & Push Backend Image
+        if: steps.check_secrets.outputs.has_credentials == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.BACKEND_IMAGE }}:latest
-            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.BACKEND_IMAGE }}:${{ github.run_number }}
+            ${{ env.DOCKER_REPO }}:${{ env.BACKEND_TAG }}
+            ${{ env.DOCKER_REPO }}:${{ env.BACKEND_TAG }}-${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: ✅ Docker Push Complete
+      - name: 🏗️ Build Frontend (No Push)
+        if: steps.check_secrets.outputs.has_credentials == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 🏗️ Build Backend (No Push)
+        if: steps.check_secrets.outputs.has_credentials == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: ✅ Build Status
         run: |
-          echo "Frontend: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.FRONTEND_IMAGE }}:latest"
-          echo "Backend:  ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.BACKEND_IMAGE }}:latest"
+          if [ "${{ steps.check_secrets.outputs.has_credentials }}" = "true" ]; then
+            echo "✅ Docker Push Complete"
+            echo "Frontend: ${{ env.DOCKER_REPO }}:${{ env.FRONTEND_TAG }}"
+            echo "Backend:  ${{ env.DOCKER_REPO }}:${{ env.BACKEND_TAG }}"
+          else
+            echo "⚠️ Docker credentials not configured"
+            echo "Images built but not pushed"
+            echo "To enable push, add these secrets to GitHub:"
+            echo "  - DOCKER_HUB_USERNAME"
+            echo "  - DOCKER_HUB_TOKEN"
+          fi
